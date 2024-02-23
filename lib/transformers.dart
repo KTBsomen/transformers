@@ -1,123 +1,177 @@
 library transformers;
 
 import 'dart:async';
+import 'dart:ffi';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import 'dart:convert';
 
-class MyApp extends StatefulWidget {
-  const MyApp({super.key});
+typedef ConsoleMessageCallback = dynamic Function(
+    ConsoleMessage consoleMessage);
+typedef LoadStartCallback = void Function(String url);
+typedef LoadStopCallback = void Function(String url);
+typedef ModelLoadSuccessCallback = void Function(dynamic modelLoadedResult);
+typedef ModelLoadFailedCallback = void Function(dynamic errorResult);
 
-  @override
-  State<MyApp> createState() => _MyAppState();
-}
-
-class _MyAppState extends State<MyApp> {
-  HeadlessInAppWebView? headlessWebView;
-  String url = "";
-
-  @override
-  void initState() {
-    super.initState();
-
-    headlessWebView = HeadlessInAppWebView(
-      initialUrlRequest: URLRequest(url: WebUri("https://fluttertransformer.web.app/")),
-      initialSettings: InAppWebViewSettings(isInspectable: kDebugMode),
-      onWebViewCreated: (controller) {
-        const snackBar = SnackBar(
-          content: Text('HeadlessInAppWebView created!'),
-          duration: Duration(seconds: 1),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(snackBar);
-      },
-      onConsoleMessage: (controller, consoleMessage) {
-        final snackBar = SnackBar(
-          content: Text('Console Message: ${consoleMessage.message}'),
-          duration: const Duration(seconds: 1),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(snackBar);
-      },
-      onLoadStart: (controller, url) async {
-        final snackBar = SnackBar(
-          content: Text('onLoadStart $url'),
-          duration: const Duration(seconds: 1),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(snackBar);
-
-        setState(() {
-          this.url = url?.toString() ?? '';
-        });
-      },
-      onLoadStop: (controller, url) async {
-        final snackBar = SnackBar(
-          content: Text('onLoadStop $url'),
-          duration: const Duration(seconds: 1),
-        );
-        ScaffoldMessenger.of(context).showSnackBar(snackBar);
-
-        setState(() {
-          this.url = url?.toString() ?? '';
-        });
-      },
-    );
+class Transformers {
+  static Transformers? _instance;
+  static Transformers get instance {
+    _instance ??= Transformers._(); // Create instance if it doesn't exist
+    return _instance!;
   }
 
-  @override
-  void dispose() {
-    super.dispose();
-    headlessWebView?.dispose();
+  Function? onUpdateCallback;
+  Function? onModelLoadSucess;
+  Function? onModelLoadFailed;
+  Function? onRunSuccess;
+  Function? onRunFailed;
+  Function? onStringTypeError;
+  Function? onProgressCallbackNotAllowed;
+
+  InAppWebViewController? _webViewController;
+  HeadlessInAppWebView? _headlessWebView;
+  late StreamController<ConsoleMessage> _consoleMessageController;
+
+  Transformers._() {
+    // _consoleMessageController = StreamController<ConsoleMessage>.broadcast();
+
+    // Call the initialization method in the constructor
+    _headlessWebView?.dispose();
+    _init();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-        appBar: AppBar(
-            title: const Text(
-          "HeadlessInAppWebView Example",
-        )),
-        body: SafeArea(
-            child: Column(children: <Widget>[
-          Container(
-            padding: const EdgeInsets.all(20.0),
-            child: Text(
-                "URL: ${(url.length > 50) ? "${url.substring(0, 50)}..." : url}"),
-          ),
-          Center(
-            child: ElevatedButton(
-                onPressed: () async {
-                  await headlessWebView?.dispose();
-                  await headlessWebView?.run();
-                },
-                child: const Text("Run HeadlessInAppWebView")),
-          ),
-          Center(
-            child: ElevatedButton(
-                onPressed: () async {
-                  if (headlessWebView?.isRunning() ?? false) {
-                    await headlessWebView?.webViewController
-                        ?.evaluateJavascript(
-                            source: "console.log('Here is the message!');");
-                  } else {
-                    const snackBar = SnackBar(
-                      content: Text(
-                          'HeadlessInAppWebView is not running. Click on "Run HeadlessInAppWebView"!'),
-                      duration: Duration(milliseconds: 1500),
-                    );
-                    ScaffoldMessenger.of(context).showSnackBar(snackBar);
-                  }
-                },
-                child: const Text("Send console.log message")),
-          ),
-          Center(
-            child: ElevatedButton(
-                onPressed: () {
-                  headlessWebView?.dispose();
-                  setState(() {
-                    url = '';
-                  });
-                },
-                child: const Text("Dispose HeadlessInAppWebView")),
-          )
-        ])));
+  Map<String, dynamic> currentMessage = {};
+  bool isTransformersLoaded = false;
+  Future<void> _init() async {
+    if (_headlessWebView == null) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        await InAppWebViewController.setWebContentsDebuggingEnabled(kDebugMode);
+      }
+
+      _headlessWebView = HeadlessInAppWebView(
+        initialUrlRequest:
+            URLRequest(url: WebUri("https://fluttertransformer.web.app?x#i=1")),
+        initialSettings: InAppWebViewSettings(isInspectable: kDebugMode),
+        onProgressChanged: (controller, progress) {
+          print("\n\nPROGRESS -> $progress");
+        },
+        onWebViewCreated: (controller) {},
+        onConsoleMessage: (controller, consoleMessage) {
+          try {
+            currentMessage = convertToJSONObject(consoleMessage.message);
+          } catch (err) {
+            //do nothing
+          }
+
+          if (currentMessage['status'] == 'modelLoaded') {
+            onModelLoadSucess?.call();
+          } else if (currentMessage['status'] == 'modelLoadFailed') {
+            onModelLoadFailed?.call();
+          }
+          onUpdateCallback?.call();
+          //_consoleMessageController.add(consoleMessage);
+        },
+        onLoadStart: (controller, url) async {},
+        onLoadStop: (controller, url) async {
+          isTransformersLoaded = true;
+        },
+      );
+      await _headlessWebView?.run();
+    } else {
+      _headlessWebView = _headlessWebView;
+    }
+  }
+
+  InAppWebViewController? get transformers =>
+      _headlessWebView?.webViewController;
+  get logs => currentMessage;
+  void makefalse() {
+    isTransformersLoaded = !isTransformersLoaded;
+    print("changed $isTransformersLoaded");
+    onUpdateCallback?.call();
+  }
+
+  dynamic convertToJSONObject(String latestConsoleMessage) {
+    try {
+      // Try parsing the message as JSON
+
+      return jsonDecode(latestConsoleMessage);
+    } catch (error) {
+      print(error);
+      // If parsing fails, return the original message
+      return latestConsoleMessage;
+    }
+  }
+
+  Future<dynamic> pipeline(
+    String task,
+    String name,
+    Map<String, dynamic>? options,
+  ) async {
+    // final consoleMessageSubscription =
+    //     consoleMessagesStream.listen((consoleMessage) {
+    //   //  if (consoleMessage.type == ConsoleMessageType.progress) {
+    //   onProgress(jsonDecode(consoleMessage.message));
+    // });
+
+    try {
+      await _headlessWebView?.webViewController?.evaluateJavascript(
+        source: """loadModel("$task","$name",${jsonEncode(options)})""",
+      );
+    } finally {
+      // Cancel the subscription after the evaluation is completed or if an error occurs
+      //consoleMessageSubscription?.cancel();
+    }
+  }
+
+  Future<dynamic> runPipeline(
+    String modelId,
+    dynamic data,
+    Map<String, dynamic>? options,
+    List<dynamic> additionalParameters,
+  ) async {
+    String jsFunctionCall;
+
+    if (additionalParameters.isEmpty) {
+      jsFunctionCall = """
+    runModel(
+      "$modelId",
+      ${jsonEncode(data)},
+      ${jsonEncode(options)}
+    )
+    """;
+    } else {
+      jsFunctionCall = """
+    runModel(
+      "$modelId",
+      ${jsonEncode(data)},
+      ${jsonEncode(options)},
+      ${additionalParameters.map((param) => jsonEncode(param)).toList()}
+    )
+    """;
+    }
+
+    try {
+      await _headlessWebView?.webViewController?.evaluateJavascript(
+        source: jsFunctionCall,
+      );
+    } finally {
+      // Clean-up logic here if needed
+    }
+  }
+
+  Future<dynamic> getListOfPipelines() async {
+    var listOfmodels = await _headlessWebView?.webViewController
+        ?.evaluateJavascript(source: """(()=>{
+          return pipeline;
+        })()""");
+    print(listOfmodels);
+    return listOfmodels;
+  }
+
+  ConsoleMessageCallback _updateState(
+    ConsoleMessageCallback callback,
+  ) {
+    return callback;
   }
 }

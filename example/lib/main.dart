@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import "package:transformers/transformers.dart";
+import "page1.dart";
 
 void main() {
   runApp(const MyApp());
@@ -57,7 +60,8 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   int _counter = 0;
-
+  String model1 = '';
+  Transformers transformers = Transformers.instance;
   void _incrementCounter() {
     setState(() {
       // This call to setState tells the Flutter framework that something has
@@ -71,6 +75,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // transformers.onUpdateCallback = () {
+    //   print("transformers.logs" + transformers.logs.toString() + "\n");
+    //   setState(() {});
+    // };
+
     // This method is rerun every time setState is called, for instance as done
     // by the _incrementCounter method above.
     //
@@ -106,6 +115,9 @@ class _MyHomePageState extends State<MyHomePage> {
           // wireframe for each widget.
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
+            transformers.isTransformersLoaded
+                ? Text("Loaded true")
+                : Text("loaded false"),
             const Text(
               'You have pushed the button this many times:',
             ),
@@ -113,6 +125,54 @@ class _MyHomePageState extends State<MyHomePage> {
               '$_counter',
               style: Theme.of(context).textTheme.headlineMedium,
             ),
+            ElevatedButton(
+                onPressed: () async {
+                  // a demo json sample
+                  final Map<String, dynamic> data = {
+                    'name': "Tom",
+                    'age': 25,
+                    'isMarried': false,
+                    'children': ['Jack', 'Jill']
+                  };
+                  print(jsonEncode(data));
+                  print(transformers.isTransformersLoaded);
+                  print(await transformers.transformers?.evaluateJavascript(
+                      source: "console.log(${jsonEncode(data)});"));
+                },
+                child: Icon(Icons.add)),
+            ElevatedButton(
+                onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => Counter()),
+                    ),
+                child: Text('Go to second page')),
+            ElevatedButton(
+                onPressed: () async {
+                  var x = await transformers.transformers
+                      ?.evaluateJavascript(source: """console.log(pipeline)""");
+                  print(x);
+                },
+                child: Text("getpipe")),
+            ElevatedButton(
+                onPressed: () async {
+                  var res = await transformers.pipeline("sentiment-analysis",
+                      'Xenova/bert-base-multilingual-uncased-sentiment', {
+                    'name': "Tom",
+                    'age': 25,
+                    'isMarried': false,
+                    'children': ['Jack', 'Jill']
+                  });
+                  transformers.onModelLoadSucess = () {
+                    model1 = transformers.logs["message"]["modelId"].toString();
+
+                    print("transformer model load ${model1}");
+                  };
+                  transformers.onModelLoadFailed = () {
+                    print(
+                        "transformer model load error${transformers.logs.toString()}");
+                  };
+                },
+                child: Text('load model'))
           ],
         ),
       ),
